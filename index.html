@@ -14,7 +14,6 @@
       font-family: sans-serif;
     }
 
-    /* Add this to your style block */
     .video-container {
       position: relative;
       width: 720px;
@@ -26,7 +25,6 @@
       top: 0;
       left: 0;
       pointer-events: none;
-      /* Allows clicks to pass through */
     }
 
     video {
@@ -47,10 +45,10 @@
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('overlay');
 
-    // 0. The Tracker Object: Remembers recent ages to calculate a stable average
+    // Trackers for stable UI values
     const ageAverages = {};
+    const expressionTracker = {};
 
-    // 1. Turn on the camera first
     function startVideo() {
       console.log("Requesting camera access...");
       navigator.mediaDevices.getUserMedia({ video: {} })
@@ -65,7 +63,6 @@
         });
     }
 
-    // 2. Load the AI models
     async function loadModels() {
       console.log("Downloading AI models from GitHub...");
       const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
@@ -74,7 +71,8 @@
           faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-          faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL)
+          faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL) // <--- ADD THIS LINE
         ]);
         console.log("AI Models Loaded! Recognition starting...");
         startRecognitionLoop();
@@ -83,7 +81,6 @@
       }
     }
 
-    // 3. The Recognition Loop
     function startRecognitionLoop() {
       video.addEventListener('play', () => {
         const displaySize = { width: video.width, height: video.height };
@@ -91,13 +88,11 @@
 
         setInterval(async () => {
           try {
-            // 1. ADD THIS LINE HERE: Create a strict confidence threshold (60%)
             const detectionOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.60 });
-
-            // 2. PASS IT IN HERE: Tell the detector to use those options
             const detections = await faceapi.detectAllFaces(video, detectionOptions)
               .withFaceLandmarks()
               .withAgeAndGender()
+              .withFaceExpressions() // Added mood tracking
               .withFaceDescriptors();
 
             const resizedDetections = faceapi.resizeResults(detections, displaySize);
@@ -106,82 +101,65 @@
 
             for (const detection of resizedDetections) {
               const vector = Array.from(detection.descriptor);
-              const rawAge = Math.round(detection.age); // The jittery raw guess
-
-              // Ask Milvus who this is
+              const rawAge = Math.round(detection.age);
+              
+              // Identity check
               const response = await fetch('http://localhost:3000/api/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ liveVector: vector })
               });
               const result = await response.json();
+              const nameKey = result.name || "Unknown";
 
-              // --- SMOOTHING LOGIC ---
-              const nameKey = result.name;
-
-              // If this is the first time seeing this person, create an array for them
-              if (!ageAverages[nameKey]) {
-                ageAverages[nameKey] = [];
-              }
-
-              // Push the new raw age into their array
+              // Smoothing: Age
+              if (!ageAverages[nameKey]) ageAverages[nameKey] = [];
               ageAverages[nameKey].push(rawAge);
+              if (ageAverages[nameKey].length > 10) ageAverages[nameKey].shift();
+              const stableAge = Math.round(ageAverages[nameKey].reduce((a, b) => a + b, 0) / ageAverages[nameKey].length);
 
-              // Only keep the last 10 frames of data to prevent lag
-              if (ageAverages[nameKey].length > 10) {
-                ageAverages[nameKey].shift();
-              }
+              // Smoothing: Mood
+              const mood = Object.keys(detection.expressions).reduce((a, b) => detection.expressions[a] > detection.expressions[b] ? a : b);
+              if (!expressionTracker[nameKey]) expressionTracker[nameKey] = [];
+              expressionTracker[nameKey].push(mood);
+              if (expressionTracker[nameKey].length > 10) expressionTracker[nameKey].shift();
+              const stableMood = expressionTracker[nameKey].sort((a,b) =>
+                  expressionTracker[nameKey].filter(v => v===a).length - expressionTracker[nameKey].filter(v => v===b).length
+              ).pop();
 
-              // Inside your recognition loop
-              const gender = detection.gender;
-              // If the AI is at least 80% sure it's male, or if it just defaults to male
-              const genderLabel = (gender === 'male') ? 'M' : 'F';
-
-              // Calculate the stable average
-              const sum = ageAverages[nameKey].reduce((a, b) => a + b, 0);
-              const stableAge = Math.round(sum / ageAverages[nameKey].length);
-              // -----------------------
-
+              const genderLabel = (detection.gender === 'male') ? 'M' : 'F';
               const box = detection.detection.box;
               const boxColor = result.recognized ? '#00ff00' : '#ff0000';
 
+              // Drawing
               ctx.strokeStyle = boxColor;
               ctx.lineWidth = 3;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-              // Setup Text using the STABLE age
-              // const text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
-              // --- Updated Text Logic ---
-              let text;
-              if (result.recognized) {
-                // If recognized, show Name, Age, and Timestamp
-                text = `${result.name} (${stableAge} yrs) - ${genderLabel}`;
-              } else {
-                // If unknown, show ONLY Age
-                text = `${stableAge} yrs`;
-              }
-              // --------------------------
-              ctx.font = '22px Arial bold';
-              const textWidth = ctx.measureText(text).width;
-
+              // Background Panel (Larger to fit two lines)
               ctx.fillStyle = 'black';
-              ctx.fillRect(box.x, box.y - 32, textWidth + 10, 30);
+              ctx.fillRect(box.x, box.y - 60, box.width, 55);
 
+              // Top Line: Identity/Age/Gender
               ctx.fillStyle = boxColor;
-              ctx.fillText(text, box.x + 5, box.y - 9);
+              ctx.font = '18px Arial bold';
+              const topText = result.recognized ? `${result.name} (${stableAge}y, ${genderLabel})` : `${stableAge}y, ${genderLabel}`;
+              ctx.fillText(topText, box.x + 5, box.y - 40);
+
+              // Bottom Line: Mood
+              ctx.fillStyle = '#ffffff';
+              ctx.font = '16px Arial italic';
+              ctx.fillText(`Mood: ${stableMood.toUpperCase()}`, box.x + 5, box.y - 15);
             }
           } catch (apiErr) {
-            console.error("Backend API Error:", apiErr);
+            console.error("Loop Error:", apiErr);
           }
         }, 500);
       });
       if (!video.paused) { video.dispatchEvent(new Event('play')); }
     }
 
-    window.addEventListener('load', () => {
-      startVideo();
-    });
+    window.addEventListener('load', startVideo);
   </script>
 </body>
-
 </html>
