@@ -14,14 +14,19 @@
       font-family: sans-serif;
     }
 
+    /* Add this to your style block */
     .video-container {
       position: relative;
+      width: 720px;
+      height: 560px;
     }
 
     canvas {
       position: absolute;
       top: 0;
       left: 0;
+      pointer-events: none;
+      /* Allows clicks to pass through */
     }
 
     video {
@@ -127,6 +132,11 @@
                 ageAverages[nameKey].shift();
               }
 
+              // Inside your recognition loop
+              const gender = detection.gender;
+              // If the AI is at least 80% sure it's male, or if it just defaults to male
+              const genderLabel = (gender === 'male') ? 'M' : 'F';
+
               // Calculate the stable average
               const sum = ageAverages[nameKey].reduce((a, b) => a + b, 0);
               const stableAge = Math.round(sum / ageAverages[nameKey].length);
@@ -145,7 +155,7 @@
               let text;
               if (result.recognized) {
                 // If recognized, show Name, Age, and Timestamp
-                text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
+                text = `${result.name} (${stableAge} yrs) - ${genderLabel}`;
               } else {
                 // If unknown, show ONLY Age
                 text = `${stableAge} yrs`;
