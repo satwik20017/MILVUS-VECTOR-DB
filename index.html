@@ -1,16 +1,37 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <title>Live CCTV Bounding Box</title>
   <style>
-    body { display: flex; justify-content: center; align-items: center; height: 100vh; background: #111; font-family: sans-serif;}
-    .video-container { position: relative; }
-    canvas { position: absolute; top: 0; left: 0; } 
-    video { border-radius: 8px; border: 2px solid #333; }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: #111;
+      font-family: sans-serif;
+    }
+
+    .video-container {
+      position: relative;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    video {
+      border-radius: 8px;
+      border: 2px solid #333;
+    }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
+
 <body>
   <div class="video-container">
     <video id="webcam" width="720" height="560" autoplay muted></video>
@@ -31,7 +52,7 @@
         .then(stream => {
           video.srcObject = stream;
           console.log("Camera successfully connected!");
-          loadModels(); 
+          loadModels();
         })
         .catch(err => {
           console.error("Camera Error:", err);
@@ -65,21 +86,21 @@
 
         setInterval(async () => {
           try {
-          // 1. ADD THIS LINE HERE: Create a strict confidence threshold (60%)
+            // 1. ADD THIS LINE HERE: Create a strict confidence threshold (60%)
             const detectionOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.60 });
 
             // 2. PASS IT IN HERE: Tell the detector to use those options
             const detections = await faceapi.detectAllFaces(video, detectionOptions)
               .withFaceLandmarks()
-              .withAgeAndGender() 
+              .withAgeAndGender()
               .withFaceDescriptors();
-              
+
             const resizedDetections = faceapi.resizeResults(detections, displaySize);
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
             for (const detection of resizedDetections) {
-              const vector = Array.from(detection.descriptor); 
+              const vector = Array.from(detection.descriptor);
               const rawAge = Math.round(detection.age); // The jittery raw guess
 
               // Ask Milvus who this is
@@ -91,48 +112,58 @@
               const result = await response.json();
 
               // --- SMOOTHING LOGIC ---
-              const nameKey = result.name; 
-              
+              const nameKey = result.name;
+
               // If this is the first time seeing this person, create an array for them
               if (!ageAverages[nameKey]) {
-                  ageAverages[nameKey] = [];
+                ageAverages[nameKey] = [];
               }
-              
+
               // Push the new raw age into their array
               ageAverages[nameKey].push(rawAge);
-              
+
               // Only keep the last 10 frames of data to prevent lag
               if (ageAverages[nameKey].length > 10) {
-                  ageAverages[nameKey].shift();
+                ageAverages[nameKey].shift();
               }
-              
+
               // Calculate the stable average
               const sum = ageAverages[nameKey].reduce((a, b) => a + b, 0);
               const stableAge = Math.round(sum / ageAverages[nameKey].length);
               // -----------------------
 
               const box = detection.detection.box;
-              const boxColor = result.recognized ? '#00ff00' : '#ff0000'; 
-              
+              const boxColor = result.recognized ? '#00ff00' : '#ff0000';
+
               ctx.strokeStyle = boxColor;
               ctx.lineWidth = 3;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
 
               // Setup Text using the STABLE age
-              const text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
-              ctx.font = '22px Arial';
+              // const text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
+              // --- Updated Text Logic ---
+              let text;
+              if (result.recognized) {
+                // If recognized, show Name, Age, and Timestamp
+                text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
+              } else {
+                // If unknown, show ONLY Age
+                text = `${stableAge} yrs`;
+              }
+              // --------------------------
+              ctx.font = '22px Arial bold';
               const textWidth = ctx.measureText(text).width;
 
               ctx.fillStyle = 'black';
               ctx.fillRect(box.x, box.y - 32, textWidth + 10, 30);
-              
+
               ctx.fillStyle = boxColor;
               ctx.fillText(text, box.x + 5, box.y - 9);
             }
           } catch (apiErr) {
             console.error("Backend API Error:", apiErr);
           }
-        }, 500); 
+        }, 500);
       });
       if (!video.paused) { video.dispatchEvent(new Event('play')); }
     }
@@ -142,4 +173,5 @@
     });
   </script>
 </body>
+
 </html>

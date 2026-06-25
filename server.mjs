@@ -140,7 +140,7 @@ app.post('/api/recognize', async (req, res) => {
     const topMatch = searchResult.results[0];
     const captureTime = new Date().toLocaleTimeString();
 
-    if (topMatch && topMatch.score < 0.45) {
+    if (topMatch && topMatch.score < 0.85) {
       res.json({ recognized: true, name: topMatch.person_name, timestamp: captureTime });
     } else {
       res.json({ recognized: false, name: "Unknown", timestamp: captureTime });
