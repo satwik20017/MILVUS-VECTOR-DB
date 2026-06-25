@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live CCTV Bounding Box</title>
+  <style>
+    body { display: flex; justify-content: center; align-items: center; height: 100vh; background: #111; font-family: sans-serif;}
+    .video-container { position: relative; }
+    canvas { position: absolute; top: 0; left: 0; } 
+    video { border-radius: 8px; border: 2px solid #333; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+</head>
+<body>
+  <div class="video-container">
+    <video id="webcam" width="720" height="560" autoplay muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('overlay');
+
+    // 0. The Tracker Object: Remembers recent ages to calculate a stable average
+    const ageAverages = {};
+
+    // 1. Turn on the camera first
+    function startVideo() {
+      console.log("Requesting camera access...");
+      navigator.mediaDevices.getUserMedia({ video: {} })
+        .then(stream => {
+          video.srcObject = stream;
+          console.log("Camera successfully connected!");
+          loadModels(); 
+        })
+        .catch(err => {
+          console.error("Camera Error:", err);
+          alert("Cannot access the webcam. Check if another app is using it or if permissions are blocked.");
+        });
+    }
+
+    // 2. Load the AI models
+    async function loadModels() {
+      console.log("Downloading AI models from GitHub...");
+      const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights';
+      try {
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+          faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL)
+        ]);
+        console.log("AI Models Loaded! Recognition starting...");
+        startRecognitionLoop();
+      } catch (err) {
+        console.error("Failed to load AI models:", err);
+      }
+    }
+
+    // 3. The Recognition Loop
+    function startRecognitionLoop() {
+      video.addEventListener('play', () => {
+        const displaySize = { width: video.width, height: video.height };
+        faceapi.matchDimensions(canvas, displaySize);
+
+        setInterval(async () => {
+          try {
+          // 1. ADD THIS LINE HERE: Create a strict confidence threshold (60%)
+            const detectionOptions = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.60 });
+
+            // 2. PASS IT IN HERE: Tell the detector to use those options
+            const detections = await faceapi.detectAllFaces(video, detectionOptions)
+              .withFaceLandmarks()
+              .withAgeAndGender() 
+              .withFaceDescriptors();
+              
+            const resizedDetections = faceapi.resizeResults(detections, displaySize);
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            for (const detection of resizedDetections) {
+              const vector = Array.from(detection.descriptor); 
+              const rawAge = Math.round(detection.age); // The jittery raw guess
+
+              // Ask Milvus who this is
+              const response = await fetch('http://localhost:3000/api/recognize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ liveVector: vector })
+              });
+              const result = await response.json();
+
+              // --- SMOOTHING LOGIC ---
+              const nameKey = result.name; 
+              
+              // If this is the first time seeing this person, create an array for them
+              if (!ageAverages[nameKey]) {
+                  ageAverages[nameKey] = [];
+              }
+              
+              // Push the new raw age into their array
+              ageAverages[nameKey].push(rawAge);
+              
+              // Only keep the last 10 frames of data to prevent lag
+              if (ageAverages[nameKey].length > 10) {
+                  ageAverages[nameKey].shift();
+              }
+              
+              // Calculate the stable average
+              const sum = ageAverages[nameKey].reduce((a, b) => a + b, 0);
+              const stableAge = Math.round(sum / ageAverages[nameKey].length);
+              // -----------------------
+
+              const box = detection.detection.box;
+              const boxColor = result.recognized ? '#00ff00' : '#ff0000'; 
+              
+              ctx.strokeStyle = boxColor;
+              ctx.lineWidth = 3;
+              ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+              // Setup Text using the STABLE age
+              const text = `${result.name} (${stableAge} yrs) - ${result.timestamp}`;
+              ctx.font = '22px Arial';
+              const textWidth = ctx.measureText(text).width;
+
+              ctx.fillStyle = 'black';
+              ctx.fillRect(box.x, box.y - 32, textWidth + 10, 30);
+              
+              ctx.fillStyle = boxColor;
+              ctx.fillText(text, box.x + 5, box.y - 9);
+            }
+          } catch (apiErr) {
+            console.error("Backend API Error:", apiErr);
+          }
+        }, 500); 
+      });
+      if (!video.paused) { video.dispatchEvent(new Event('play')); }
+    }
+
+    window.addEventListener('load', () => {
+      startVideo();
+    });
+  </script>
+</body>
+</html>
