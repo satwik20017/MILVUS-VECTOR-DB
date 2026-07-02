@@ -27,19 +27,19 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname)); 
+    cb(null, Date.now() + path.extname(file.originalname));
   }
 });
 const upload = multer({ storage });
 
 const client = new MilvusClient({ address: 'localhost:19530' });
-const COLLECTION_NAME = 'cctv_identities_v2'; 
+const COLLECTION_NAME = 'cctv_identities_v2';
 
 // 3. Helper to auto-download AI weights from GitHub (Includes Shard Fix)
 async function downloadModels() {
   const dir = path.resolve('./models');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-  
+
   const MODEL_URL = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights/';
   const files = [
     'ssd_mobilenetv1_model-weights_manifest.json', 'ssd_mobilenetv1_model-shard1', 'ssd_mobilenetv1_model-shard2',
@@ -61,7 +61,7 @@ async function downloadModels() {
 // 4. Initialize the Complete Backend
 async function setupBackend() {
   await downloadModels();
-  
+
   console.log('🧠 Loading AI Models into memory...');
   const modelsDir = path.resolve('./models');
   await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsDir);
@@ -106,7 +106,7 @@ app.post('/api/enroll', upload.single('image'), async (req, res) => {
     const detection = await faceapi.detectSingleFace(img).withFaceLandmarks().withFaceDescriptor();
 
     if (!detection) {
-      fs.unlinkSync(filePath); 
+      fs.unlinkSync(filePath);
       return res.status(400).json({ error: "No face detected in the photo." });
     }
 
@@ -116,7 +116,7 @@ app.post('/api/enroll', upload.single('image'), async (req, res) => {
       collection_name: COLLECTION_NAME,
       data: [{ person_name: name, photo_path: filePath, face_vector: vector }]
     });
-
+    console.log(`📸 Saved upload for: ${name}  \n ********`);
     res.json({ success: true, message: `${name} enrolled! Photo saved at ${filePath}` });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -140,7 +140,7 @@ app.post('/api/recognize', async (req, res) => {
     const topMatch = searchResult.results[0];
     const captureTime = new Date().toLocaleTimeString();
 
-    if (topMatch && topMatch.score < 0.85) {
+    if (topMatch && topMatch.score < 0.3) {
       res.json({ recognized: true, name: topMatch.person_name, timestamp: captureTime });
     } else {
       res.json({ recognized: false, name: "Unknown", timestamp: captureTime });

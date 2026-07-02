@@ -25,11 +25,13 @@
       top: 0;
       left: 0;
       pointer-events: none;
+      transform: scaleX(-1);
     }
 
     video {
       border-radius: 8px;
       border: 2px solid #333;
+      transform: scaleX(-1);
     }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -99,57 +101,44 @@
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            for (const detection of resizedDetections) {
-              const vector = Array.from(detection.descriptor);
-              const rawAge = Math.round(detection.age);
-              
-              // Identity check
-              const response = await fetch('http://localhost:3000/api/recognize', {
+            for (const det of resizedDetections) {
+              const res = await fetch('http://localhost:3000/api/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ liveVector: vector })
+                body: JSON.stringify({ liveVector: Array.from(det.descriptor) })
               });
-              const result = await response.json();
-              const nameKey = result.name || "Unknown";
+              const result = await res.json(); // Now 'result' is defined!
 
-              // Smoothing: Age
-              if (!ageAverages[nameKey]) ageAverages[nameKey] = [];
-              ageAverages[nameKey].push(rawAge);
-              if (ageAverages[nameKey].length > 10) ageAverages[nameKey].shift();
-              const stableAge = Math.round(ageAverages[nameKey].reduce((a, b) => a + b, 0) / ageAverages[nameKey].length);
+              // 2. NOW USE 'result' FOR DRAWING
+              const box = det.detection.box;
+              const mood = Object.keys(det.expressions).reduce((a, b) => det.expressions[a] > det.expressions[b] ? a : b);
+              const topText = result.recognized ? `${result.name} (${Math.round(det.age)}y)` : "Unknown";
 
-              // Smoothing: Mood
-              const mood = Object.keys(detection.expressions).reduce((a, b) => detection.expressions[a] > detection.expressions[b] ? a : b);
-              if (!expressionTracker[nameKey]) expressionTracker[nameKey] = [];
-              expressionTracker[nameKey].push(mood);
-              if (expressionTracker[nameKey].length > 10) expressionTracker[nameKey].shift();
-              const stableMood = expressionTracker[nameKey].sort((a,b) =>
-                  expressionTracker[nameKey].filter(v => v===a).length - expressionTracker[nameKey].filter(v => v===b).length
-              ).pop();
-
-              const genderLabel = (detection.gender === 'male') ? 'M' : 'F';
-              const box = detection.detection.box;
-              const boxColor = result.recognized ? '#00ff00' : '#ff0000';
-
-              // Drawing
-              ctx.strokeStyle = boxColor;
+              ctx.strokeStyle = result.recognized ? '#00ff00' : '#ff0000';
               ctx.lineWidth = 3;
               ctx.strokeRect(box.x, box.y, box.width, box.height);
 
-              // Background Panel (Larger to fit two lines)
+              // 2. DRAW BLACK BACKGROUND PANEL
               ctx.fillStyle = 'black';
               ctx.fillRect(box.x, box.y - 60, box.width, 55);
 
-              // Top Line: Identity/Age/Gender
-              ctx.fillStyle = boxColor;
-              ctx.font = '18px Arial bold';
-              const topText = result.recognized ? `${result.name} (${stableAge}y, ${genderLabel})` : `${stableAge}y, ${genderLabel}`;
-              ctx.fillText(topText, box.x + 5, box.y - 40);
+              // 3. DRAW TEXT WITH COUNTER-FLIP LOGIC
+              ctx.save(); // Save state before flipping
+              ctx.scale(-1, 1); // Flip horizontally for text
+              ctx.translate(-canvas.width, 0); // Shift back into view
 
-              // Bottom Line: Mood
+              // Flipped X coordinate for the text
+              const flipX = canvas.width - box.x - box.width;
+
+              ctx.fillStyle = ctx.strokeStyle;
+              ctx.font = '18px Arial bold';
+              ctx.fillText(topText, flipX + 5, box.y - 40);
+
               ctx.fillStyle = '#ffffff';
               ctx.font = '16px Arial italic';
-              ctx.fillText(`Mood: ${stableMood.toUpperCase()}`, box.x + 5, box.y - 15);
+              ctx.fillText(`Mood: ${mood.toUpperCase()}`, flipX + 5, box.y - 15);
+
+              ctx.restore(); // Restore to normal state
             }
           } catch (apiErr) {
             console.error("Loop Error:", apiErr);
@@ -162,4 +151,5 @@
     window.addEventListener('load', startVideo);
   </script>
 </body>
+
 </html>
